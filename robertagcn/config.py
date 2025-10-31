@@ -24,9 +24,9 @@ DROPOUT = 0.5           # Dropout rate (paper: 0.5)
 # ============================================================================
 # TRAINING PARAMETERS
 # ============================================================================
-EPOCHS = 30
-BATCH_SIZE = 48         # Mini-batch size for GCN training
-BERT_BATCH_SIZE = 48    # Batch size for BERT encoding
+EPOCHS = 100
+BATCH_SIZE = 32         # Mini-batch size for GCN training
+BERT_BATCH_SIZE = 32    # Batch size for BERT encoding
 MAX_LENGTH = 128        # Max sequence length for tokenization
 SEED = 42               # Random seed for reproducibility
 
@@ -34,14 +34,14 @@ SEED = 42               # Random seed for reproducibility
 # OPTIMIZATION
 # ============================================================================
 LR_GCN = 1e-3           # Learning rate for GCN (paper: 1e-3)
-LR_BERT = 5e-6          # Learning rate for BERT (paper: 1e-5, use smaller for stability)
+LR_BERT = 2e-5          # Learning rate for BERT (paper: 1e-5, use smaller for stability)
 WEIGHT_DECAY = 1e-4     # L2 regularization
-LAMBDA = 0.6            # Interpolation weight λ: Z = λ*Z_GCN + (1-λ)*Z_BERT (paper: 0.7)
+LAMBDA = 0.7            # Interpolation weight λ: Z = λ*Z_GCN + (1-λ)*Z_BERT (paper: 0.7)
 
 # ============================================================================
 # GRAPH CONSTRUCTION
 # ============================================================================
-MAX_VOCAB = 15000       # Maximum vocabulary size
+MAX_VOCAB = 20000       # Maximum vocabulary size
 MIN_DOC_FREQ = 2        # Minimum document frequency for words
 WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
 SOCIAL_WEIGHT = 1.0     # Weight for social interaction edges (0 = disable)
