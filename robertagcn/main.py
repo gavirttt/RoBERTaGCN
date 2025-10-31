@@ -11,7 +11,7 @@ import argparse
 import importlib.util
 import sys
 from train import run_training
-from train_cv import run_10fold_cv
+from train_cv import run_Kfold_cv
 
 
 def load_config_from_file(config_path):
@@ -193,7 +193,7 @@ def main():
     try:
         if mode == 'cv':
             print("Starting 10-fold cross-validation...")
-            run_10fold_cv(config)
+            run_Kfold_cv(config)
         elif mode in ['train', 'quickrun']:
             if mode == 'quickrun':
                 print("Running in QUICKRUN mode (fast testing)")
