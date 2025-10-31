@@ -13,6 +13,7 @@ import pandas as pd
 from utils import set_seed
 from data.build_graph import build_text_graph
 from models.bertgcn import BertGCN
+from early_stopping import EarlyStopping
 
 from math import ceil
 
@@ -345,6 +346,14 @@ def run_training(config):
     optimizer = Adam(all_params, weight_decay=config.get('weight_decay', 1e-5))
     loss_fn = nn.CrossEntropyLoss()
     
+    # Initialize early stopping
+    early_stopping = EarlyStopping(
+        patience=config.get('early_stopping_patience', 5),
+        verbose=True,
+        delta=config.get('early_stopping_delta', 0),
+        save_path=os.path.join(config.get('save_dir', 'checkpoints'), 'best_model.pt')
+    )
+    
     print("\n" + "="*70)
     print("Starting training...")
     print("="*70)
@@ -355,6 +364,7 @@ def run_training(config):
     print(f"LR (BERT): {config.get('lr_bert', 1e-5)}")
     print(f"Lambda: {config.get('lmbda', 0.7)}")
     print(f"Social weight: {config.get('social_weight', 1.0)}")
+    print(f"Early stopping patience: {config.get('early_stopping_patience', 5)}")
     print("="*70 + "\n")
     
     doc_indices = list(range(ndocs))
@@ -432,17 +442,89 @@ def run_training(config):
         avg_loss = float(np.mean(losses)) if losses else 0.0
         print(f"Epoch {epoch} completed | Avg Loss: {avg_loss:.4f}")
         
-        # Evaluation
-        evaluate_model(model, texts, labels, labeled_idx, A_torch, 
-                      X_words, n_classes, device, config, epoch)
+        # Evaluation - get validation loss for early stopping
+        val_loss = evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, 
+                                           X_words, n_classes, device, config, epoch)
         
-        # Save checkpoint
-        save_checkpoint(model, label_map, vocab, config, epoch)
+        # Early stopping check
+        early_stopping(val_loss, model, epoch, config)
+        
+        if early_stopping.early_stop:
+            print(f"\nEarly stopping triggered at epoch {epoch}")
+            break
+        
+        # Save checkpoint (optional - you might want to disable this if using early stopping)
+        if not config.get('save_best_only', False):
+            save_checkpoint(model, label_map, vocab, config, epoch)
     
     print("\n" + "="*70)
     print("Training completed!")
+    if early_stopping.early_stop:
+        print(f"Best model saved at: {early_stopping.save_path}")
+        print(f"Best validation loss: {early_stopping.val_loss_min:.6f}")
     print("="*70)
 
+def evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, X_words, 
+                           n_classes, device, config, epoch):
+    """Evaluate model and return validation loss"""
+    model.eval()
+    ndocs = len(texts)
+    nwords = A_torch.shape[0] - ndocs
+    
+    with torch.no_grad():
+        # Recompute memory bank
+        membank_eval = np.zeros((ndocs, config.get('feat_dim', 768)), dtype=np.float32)
+        
+        for i in tqdm(range(0, ndocs, config.get('bert_batch', 32)), 
+                     desc='Eval', leave=False):
+            texts_batch = texts[i:i+config.get('bert_batch', 32)]
+            feats = model.encoder.encode_batch(texts_batch, device=device, 
+                                              max_len=config.get('max_len', 64))
+            membank_eval[i:i+config.get('bert_batch', 32)] = feats.cpu().numpy()
+        
+        X_docs = torch.tensor(membank_eval, dtype=torch.float32, device=device)
+        X_full = torch.cat([X_docs, X_words], dim=0)
+        
+        # GCN predictions
+        gcn_logits_all = model.gcn_forward(A_torch, X_full)
+        doc_logits = gcn_logits_all[:ndocs, :]
+        
+        # BERT predictions
+        bert_logits = []
+        for i in range(0, ndocs, config.get('bert_batch', 32)):
+            bl = model.aux_clf(model.encoder.encode_batch(
+                texts[i:i+config.get('bert_batch', 32)], 
+                device=device, 
+                max_len=config.get('max_len', 64)
+            ))
+            bert_logits.append(bl.cpu())
+        bert_logits = torch.cat(bert_logits, dim=0).to(device)
+        
+        # Final predictions
+        final_logits = config.get('lmbda', 0.7) * doc_logits + \
+                      (1.0 - config.get('lmbda', 0.7)) * bert_logits
+        
+        # Calculate validation loss
+        loss_fn = nn.CrossEntropyLoss()
+        val_loss = 0.0
+        
+        if len(labeled_idx) > 0:
+            y_true = torch.tensor([labels[i] for i in labeled_idx], dtype=torch.long, device=device)
+            y_pred_logits = final_logits[labeled_idx, :]
+            val_loss = loss_fn(y_pred_logits, y_true).item()
+            
+            # Also print metrics (optional)
+            y_pred = torch.argmax(y_pred_logits, dim=1).cpu().numpy()
+            acc = (y_pred == y_true.cpu().numpy()).mean()
+            
+            print(f"\n{'='*70}")
+            print(f"Epoch {epoch} Evaluation Results")
+            print(f"{'='*70}")
+            print(f"Validation Loss: {val_loss:.4f}")
+            print(f"Accuracy: {acc*100:.2f}%")
+            print(f"{'='*70}")
+    
+    return val_loss
 
 def evaluate_model(model, texts, labels, labeled_idx, A_torch, X_words, 
                    n_classes, device, config, epoch):

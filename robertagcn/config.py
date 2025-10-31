@@ -47,6 +47,13 @@ WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
 SOCIAL_WEIGHT = 1.0     # Weight for social interaction edges (0 = disable)
 
 # ============================================================================
+# EARLY STOPPING PARAMETERS
+# ============================================================================
+EARLY_STOPPING_PATIENCE = 5           # Number of epochs to wait for improvement
+EARLY_STOPPING_DELTA = 0              # Minimum change to qualify as improvement
+SAVE_BEST_ONLY = True                 # Save only the best model
+
+# ============================================================================
 # OUTPUT
 # ============================================================================
 SAVE_DIR = 'checkpoints'
@@ -56,6 +63,7 @@ PLOT_CONFUSION_MATRIX = True  # Save confusion matrix plots
 # EXPERIMENT MODE
 # ============================================================================
 RUN_MODE = 'train'      # Options: 'train', 'cv', 'quickrun'
+FOLD = 5                 # Number of folds for cross-validation
 # 'train' = normal training
 # 'cv' = 10-fold cross-validation
 # 'quickrun' = fast test with minimal data
@@ -130,6 +138,10 @@ def get_config(preset='default'):
         'prefinetune': PREFINETUNE_BERT,
         'prefinetune_epochs': PREFINETUNE_EPOCHS,
         'prefinetune_lr': PREFINETUNE_LR,
+        'early_stopping_patience': EARLY_STOPPING_PATIENCE,
+        'early_stopping_delta': EARLY_STOPPING_DELTA,
+        'save_best_only': SAVE_BEST_ONLY,
+        'fold': FOLD,
     }
     
     if preset == 'quickrun':
@@ -140,6 +152,7 @@ def get_config(preset='default'):
             'max_vocab': 1000,
             'max_len': 32,
             'prefinetune': False,
+            'early_stopping_patience': 2,  # Quick stopping for quickrun
         })
     
     elif preset == 'low_resource':

@@ -13,12 +13,13 @@ from utils import set_seed
 from data.build_graph import build_text_graph
 from models.bertgcn import BertGCN
 from train import (sparse_to_torch_sparse_tensor, read_separate_csv_data, 
-                   prefinetune_bert)
+                   prefinetune_bert, evaluate_model_with_loss)
+from early_stopping import EarlyStopping  # Add this import
 from math import ceil
 
 
 def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, device, fold_num):
-    """Train on train_idx, evaluate on val_idx"""
+    """Train on train_idx, evaluate on val_idx with early stopping"""
     ndocs = len(texts)
     nwords = A_torch.shape[0] - ndocs
     n_classes = max([lab for lab in labels if lab is not None]) + 1
@@ -34,14 +35,22 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
     optimizer = Adam(all_params, weight_decay=config.get('weight_decay', 1e-5))
     loss_fn = nn.CrossEntropyLoss()
     
+    # Initialize early stopping for this fold
+    early_stopping = EarlyStopping(
+        patience=config.get('early_stopping_patience', 5),
+        verbose=config.get('verbose', False),
+        delta=config.get('early_stopping_delta', 0),
+        save_path=os.path.join(config.get('save_dir', 'checkpoints'), f'best_model_fold{fold_num}.pt')
+    )
+    
     best_val_f1 = 0.0
     best_epoch_metrics = None
+    fold_training_history = []
     
     print(f"\n{'='*70}")
     print(f"Fold {fold_num} Training: {len(train_idx)} train, {len(val_idx)} val")
+    print(f"Early stopping patience: {config.get('early_stopping_patience', 5)}")
     print(f"{'='*70}")
-    
-    eval_freq = config.get('eval_every_n_epochs', 5)
     
     for epoch in range(1, config.get('epochs', 10) + 1):
         model.train()
@@ -65,7 +74,10 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
         np.random.shuffle(train_idx_shuffled)
         losses = []
         
-        for i in range(0, len(train_idx_shuffled), config.get('batch_size', 32)):
+        pbar = tqdm(range(0, len(train_idx_shuffled), config.get('batch_size', 32)), 
+                   desc=f'Fold {fold_num} Epoch {epoch}', leave=False)
+        
+        for i in pbar:
             batch_idx = train_idx_shuffled[i:i+config.get('batch_size', 32)]
             texts_batch = [texts[j] for j in batch_idx]
             
@@ -97,27 +109,62 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
             optimizer.step()
             
             losses.append(loss.item())
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
         
         avg_loss = float(np.mean(losses)) if losses else 0.0
         
-        # Evaluation
-        if epoch % eval_freq == 0 or epoch == config.get('epochs', 10):
-            val_metrics = evaluate_fold(model, texts, labels, val_idx, A_torch, config, device)
-            
-            print(f"Epoch {epoch:3d}/{config.get('epochs', 10)} | "
-                  f"Loss: {avg_loss:.4f} | "
-                  f"Val Acc: {val_metrics['accuracy']:.4f} | "
-                  f"Val F1: {val_metrics['macro_f1']:.4f}")
-            
-            if val_metrics['macro_f1'] > best_val_f1:
-                best_val_f1 = val_metrics['macro_f1']
-                best_epoch_metrics = val_metrics
+        # Evaluation every epoch for early stopping
+        val_metrics = evaluate_fold_with_loss(model, texts, labels, val_idx, A_torch, config, device)
+        val_loss = val_metrics['val_loss']
+        
+        # Store training history
+        epoch_history = {
+            'epoch': epoch,
+            'train_loss': avg_loss,
+            'val_loss': val_loss,
+            'val_accuracy': val_metrics['accuracy'],
+            'val_f1': val_metrics['macro_f1']
+        }
+        fold_training_history.append(epoch_history)
+        
+        print(f"Fold {fold_num} Epoch {epoch:3d}/{config.get('epochs', 10)} | "
+              f"Train Loss: {avg_loss:.4f} | "
+              f"Val Loss: {val_loss:.4f} | "
+              f"Val Acc: {val_metrics['accuracy']:.4f} | "
+              f"Val F1: {val_metrics['macro_f1']:.4f}")
+        
+        # Early stopping check
+        early_stopping(val_loss, model, epoch, config)
+        
+        if early_stopping.early_stop:
+            print(f"Early stopping triggered for fold {fold_num} at epoch {epoch}")
+            break
+        
+        # Update best metrics
+        if val_metrics['macro_f1'] > best_val_f1:
+            best_val_f1 = val_metrics['macro_f1']
+            best_epoch_metrics = val_metrics
+    
+    # Load the best model for this fold before returning
+    if early_stopping.early_stop and os.path.exists(early_stopping.save_path):
+        print(f"Loading best model for fold {fold_num} from {early_stopping.save_path}")
+        checkpoint = torch.load(early_stopping.save_path)
+        model.load_state_dict(checkpoint['model_state'])
+    
+    # If no early stopping, use the last epoch's best metrics
+    if best_epoch_metrics is None:
+        best_epoch_metrics = val_metrics
+    
+    # Add training history to results
+    best_epoch_metrics['training_history'] = fold_training_history
+    best_epoch_metrics['stopped_epoch'] = epoch if early_stopping.early_stop else config.get('epochs', 10)
+    best_epoch_metrics['best_epoch'] = checkpoint['epoch'] if early_stopping.early_stop else config.get('epochs', 10)
     
     return best_epoch_metrics
 
 
-def evaluate_fold(model, texts, labels, eval_idx, A_torch, config, device):
-    """Evaluate on eval_idx"""
+def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, device):
+    """Evaluate on eval_idx and return metrics including loss"""
     model.eval()
     ndocs = len(texts)
     nwords = A_torch.shape[0] - ndocs
@@ -157,12 +204,19 @@ def evaluate_fold(model, texts, labels, eval_idx, A_torch, config, device):
         y_true = np.array([labels[i] for i in eval_idx])
         y_pred = torch.argmax(final_logits[eval_idx, :], dim=1).cpu().numpy()
         
+        # Calculate validation loss
+        loss_fn = nn.CrossEntropyLoss()
+        y_true_tensor = torch.tensor(y_true, dtype=torch.long, device=device)
+        y_pred_logits = final_logits[eval_idx, :]
+        val_loss = loss_fn(y_pred_logits, y_true_tensor).item()
+        
         # Metrics
         precision, recall, f1, support = precision_recall_fscore_support(
             y_true, y_pred, average=None, zero_division=0
         )
         
         metrics = {
+            'val_loss': val_loss,
             'accuracy': (y_pred == y_true).mean(),
             'macro_precision': precision.mean(),
             'macro_recall': recall.mean(),
@@ -177,15 +231,24 @@ def evaluate_fold(model, texts, labels, eval_idx, A_torch, config, device):
         return metrics
 
 
-def run_10fold_cv(config):
-    """10-fold cross-validation using config dictionary"""
+def evaluate_fold(model, texts, labels, eval_idx, A_torch, config, device):
+    """Original evaluate_fold without loss calculation (for backward compatibility)"""
+    metrics = evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, device)
+    # Remove val_loss for compatibility with existing code
+    metrics.pop('val_loss', None)
+    return metrics
+
+
+def run_Kfold_cv(config):
+    """K-fold cross-validation using config dictionary with early stopping"""
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     set_seed(config.get('seed', 42))
     
     print("="*70)
-    print("BertGCN 10-Fold Cross-Validation")
+    print("BertGCN K-Fold Cross-Validation with Early Stopping")
     print("="*70)
     print(f"Device: {device}")
+    print(f"Early stopping patience: {config.get('early_stopping_patience', 5)}")
     
     # Load data
     ids, texts, labels, label_map, social_edges = read_separate_csv_data(
@@ -223,12 +286,13 @@ def run_10fold_cv(config):
     A_torch = sparse_to_torch_sparse_tensor(A_norm).coalesce().to(device)
     print(f"Graph: {ndocs + nwords} nodes\n")
     
-    # 10-fold stratified split
-    skf = StratifiedKFold(n_splits=10, shuffle=True, random_state=config.get('seed', 42))
+    # K-fold stratified split
+    skf = StratifiedKFold(n_splits=config.get('fold',10), shuffle=True, random_state=config.get('seed', 42))
     
     fold_results = []
     all_y_true = []
     all_y_pred = []
+    training_histories = []
     
     for fold, (train_indices, val_indices) in enumerate(skf.split(labeled_idx, y_labeled), 1):
         # Map to original indices
@@ -251,16 +315,19 @@ def run_10fold_cv(config):
         
         model = prefinetune_bert(model, texts, temp_labels, label_map, device, config)
         
-        # Train and evaluate fold
+        # Train and evaluate fold with early stopping
         metrics = train_one_fold(model, texts, labels, train_idx, val_idx, 
                                 A_torch, config, device, fold)
         
         fold_results.append(metrics)
         all_y_true.extend(metrics['y_true'])
         all_y_pred.extend(metrics['y_pred'])
+        training_histories.append(metrics.get('training_history', []))
         
         print(f"\n{'='*70}")
         print(f"Fold {fold} Results:")
+        print(f"  Stopped at epoch: {metrics.get('stopped_epoch', 'N/A')}")
+        print(f"  Best epoch: {metrics.get('best_epoch', 'N/A')}")
         print(f"  Accuracy:  {metrics['accuracy']:.4f}")
         print(f"  Precision: {metrics['macro_precision']:.4f}")
         print(f"  Recall:    {metrics['macro_recall']:.4f}")
@@ -269,15 +336,17 @@ def run_10fold_cv(config):
     
     # Aggregate results
     print("\n" + "="*70)
-    print("10-FOLD CROSS-VALIDATION RESULTS")
+    print("K-FOLD CROSS-VALIDATION RESULTS WITH EARLY STOPPING")
     print("="*70)
     
     accuracies = [m['accuracy'] for m in fold_results]
     precisions = [m['macro_precision'] for m in fold_results]
     recalls = [m['macro_recall'] for m in fold_results]
     f1s = [m['macro_f1'] for m in fold_results]
+    stopped_epochs = [m.get('stopped_epoch', config.get('epochs', 10)) for m in fold_results]
     
-    print(f"\nAccuracy:  {np.mean(accuracies):.4f} ± {np.std(accuracies):.4f}")
+    print(f"\nAverage epochs trained: {np.mean(stopped_epochs):.1f} ± {np.std(stopped_epochs):.1f}")
+    print(f"Accuracy:  {np.mean(accuracies):.4f} ± {np.std(accuracies):.4f}")
     print(f"Precision: {np.mean(precisions):.4f} ± {np.std(precisions):.4f}")
     print(f"Recall:    {np.mean(recalls):.4f} ± {np.std(recalls):.4f}")
     print(f"F1-Score:  {np.mean(f1s):.4f} ± {np.std(f1s):.4f}")
@@ -299,21 +368,35 @@ def run_10fold_cv(config):
         zero_division=0
     ))
     
-    # Save results
+    # Save results with training histories
     if config.get('save_dir'):
         os.makedirs(config.get('save_dir'), exist_ok=True)
         
+        # Save fold results
         results_df = pd.DataFrame({
-            'fold': range(1, 11),
+            'fold': range(1, config.get('fold',10)+1),
             'accuracy': accuracies,
             'precision': precisions,
             'recall': recalls,
-            'f1': f1s
+            'f1': f1s,
+            'stopped_epoch': stopped_epochs,
+            'best_epoch': [m.get('best_epoch', config.get('epochs', 10)) for m in fold_results]
         })
         
         save_path = os.path.join(config.get('save_dir'), '10fold_results.csv')
         results_df.to_csv(save_path, index=False)
         print(f"\nResults saved: {save_path}")
+        
+        # Save training histories
+        history_df = pd.DataFrame()
+        for fold_num, history in enumerate(training_histories, 1):
+            for epoch_data in history:
+                epoch_data['fold'] = fold_num
+                history_df = pd.concat([history_df, pd.DataFrame([epoch_data])], ignore_index=True)
+        
+        history_path = os.path.join(config.get('save_dir'), 'training_histories.csv')
+        history_df.to_csv(history_path, index=False)
+        print(f"Training histories saved: {history_path}")
     
     print("\n" + "="*70)
     print("Cross-validation completed!")
