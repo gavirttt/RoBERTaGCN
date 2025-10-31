@@ -184,8 +184,8 @@ def run_10fold_cv(args):
     print(f"Using device: {device}")
     print(f"Running 10-Fold Cross-Validation")
     
-    # Load data
-    ids, texts, labels, label_map = read_csv_data(args.data, quickrun=args.quickrun)
+    # Load data (now includes social_edges)
+    ids, texts, labels, label_map, social_edges = read_csv_data(args.data, quickrun=args.quickrun)
     ndocs = len(texts)
     
     # Get labeled indices and their labels
@@ -196,15 +196,18 @@ def run_10fold_cv(args):
     print(f"\nDataset: {ndocs} total docs, {len(labeled_idx)} labeled, {n_classes} classes")
     print(f"Label distribution: {np.bincount(y_labeled)}")
     
-    # Build graph once (transductive - includes all data)
+    # Build graph once (transductive - includes all data) with social edges
     print("\n" + "="*70)
-    print("Building text graph (all data)...")
+    print("Building text graph with social edges (all data)...")
     print("="*70)
+    social_weight = getattr(args, 'social_weight', 1.0)
     A_norm, vocab, doc_word = build_text_graph(
         texts, 
         max_features=args.max_vocab, 
         min_df=args.min_df, 
-        window_size=args.window_size
+        window_size=args.window_size,
+        social_edges=social_edges,
+        social_weight=social_weight
     )
     nwords = doc_word.shape[1]
     A_torch = sparse_to_torch_sparse_tensor(A_norm).coalesce().to(device)

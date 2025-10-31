@@ -4,7 +4,7 @@ from train_cv import run_10fold_cv
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description='BertGCN: Transductive Text Classification')
+    p = argparse.ArgumentParser(description='BertGCN: Transductive Text Classification with Social Edges')
     
     # Data
     p.add_argument('--data', required=True, help='CSV file with id,text,label')
@@ -45,6 +45,8 @@ def parse_args():
                    help='Minimum document frequency for words')
     p.add_argument('--window_size', type=int, default=20,
                    help='Sliding window size for PMI calculation (paper: 20)')
+    p.add_argument('--social_weight', type=float, default=1.0,
+                   help='Weight for social interaction edges (author/reply connections)')
     
     # Output
     p.add_argument('--save_dir', default='checkpoints')

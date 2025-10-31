@@ -42,6 +42,7 @@ def read_csv_data(path, quickrun=False):
         df = pd.concat([labeled_df, unlabeled_df], ignore_index=True)
         print(f"QUICKRUN: Sampled {len(labeled_df)} labeled + {len(unlabeled_df)} unlabeled = {len(df)} total")
 
+    # Extract document IDs
     if 'tweet_ids' in df.columns:
         df['id'] = df['tweet_ids'].astype(str)
     elif 'pseudo_id' in df.columns:
@@ -49,6 +50,7 @@ def read_csv_data(path, quickrun=False):
     if 'id' not in df.columns:
         df['id'] = df.index.astype(str)
 
+    # Extract labels
     if 'sentiment1' in df.columns:
         df['label'] = df['sentiment1']
     if 'label' not in df.columns:
@@ -66,9 +68,16 @@ def read_csv_data(path, quickrun=False):
     
     df['label'] = df['label'].apply(normalize_label)
     
+    # Extract texts, labels, and IDs
     texts = df['text'].astype(str).tolist()
     labels = df['label'].tolist()
     ids = df['id'].astype(str).tolist()
+    
+    # Extract social information
+    authors = df['pseudo_author_userName'].astype(str).tolist() if 'pseudo_author_userName' in df.columns else None
+    reply_to = df['pseudo_inReplyToUsername'].astype(str).tolist() if 'pseudo_inReplyToUsername' in df.columns else None
+    
+    # Build label map
     label_map = {}
     y = []
     for lab in labels:
@@ -84,7 +93,31 @@ def read_csv_data(path, quickrun=False):
     print(f"Dataset: {len(y)} total, {labeled_count} labeled, {unlabeled_count} unlabeled")
     print(f"Classes: {label_map}")
     
-    return ids, texts, y, label_map
+    # Create social edges dictionary
+    social_edges = None
+    if authors is not None:
+        social_edges = {
+            'authors': authors,
+            'reply_to': reply_to if reply_to is not None else [None] * len(texts),
+            'doc_ids': ids
+        }
+        
+        # Count social interactions
+        author_counts = {}
+        reply_count = 0
+        for author in authors:
+            if author and str(author).lower() not in ['', 'nan', 'none']:
+                author_counts[author] = author_counts.get(author, 0) + 1
+        
+        if reply_to:
+            reply_count = sum(1 for r in reply_to if r and str(r).lower() not in ['', 'nan', 'none'])
+        
+        multi_tweet_authors = sum(1 for count in author_counts.values() if count > 1)
+        print(f"Social info: {len(author_counts)} unique authors, "
+              f"{multi_tweet_authors} authors with multiple tweets, "
+              f"{reply_count} replies")
+    
+    return ids, texts, y, label_map, social_edges
 
 
 def prefinetune_bert(model, texts, labels, label_map, device, args):
@@ -143,7 +176,7 @@ def run_training(args):
     if args.quickrun:
         print("QUICKRUN MODE: Fast testing with minimal data")
 
-    ids, texts, labels, label_map = read_csv_data(args.data, quickrun=args.quickrun)
+    ids, texts, labels, label_map, social_edges = read_csv_data(args.data, quickrun=args.quickrun)
     ndocs = len(texts)
     labeled_idx = [i for i, y in enumerate(labels) if y is not None]
     unlabeled_idx = [i for i, y in enumerate(labels) if y is None]
@@ -154,9 +187,17 @@ def run_training(args):
     print("===================================\nDataset Characteristics")
     print(f"Documents: {ndocs}, labeled: {len(labeled_idx)}, classes: {n_classes}")
 
-    # Build graph
-    print("===================================\nBuilding text graph...")
-    A_norm, vocab, doc_word = build_text_graph(texts, max_features=args.max_vocab, min_df=args.min_df, window_size=args.window_size)
+    # Build graph with social edges
+    print("===================================\nBuilding text graph with social edges...")
+    social_weight = getattr(args, 'social_weight', 1.0)
+    A_norm, vocab, doc_word = build_text_graph(
+        texts, 
+        max_features=args.max_vocab, 
+        min_df=args.min_df, 
+        window_size=args.window_size,
+        social_edges=social_edges,
+        social_weight=social_weight
+    )
     nwords = doc_word.shape[1]
     N_total = ndocs + nwords
     A_torch = sparse_to_torch_sparse_tensor(A_norm).coalesce().to(device)
@@ -175,12 +216,9 @@ def run_training(args):
     model = prefinetune_bert(model, texts, labels, label_map, device, args)
 
     # CRITICAL: Paper uses Adam for BERT, but the key is the LR difference
-    # Paper emphasizes: "we set a small learning rate for the BERT module" (1e-5)
-    # GCN gets standard LR (1e-3 in paper, configurable here)
     gcn_params = list(model.gcn.parameters()) + list(model.aux_clf.parameters())
     bert_params = list(model.encoder.model.parameters())
     
-    # Single optimizer approach (simpler, paper doesn't explicitly require separate optimizers)
     all_params = [
         {'params': gcn_params, 'lr': args.lr_gcn},
         {'params': bert_params, 'lr': args.lr_bert}
@@ -194,8 +232,7 @@ def run_training(args):
     for epoch in range(1, args.epochs + 1):
         model.train()
         
-        # PAPER SECTION 3.3: "At the beginning of each epoch, we first compute all 
-        # document embeddings using the current BERT module and store them in M"
+        # Build memory bank
         print(f"Epoch {epoch}: Computing memory bank with current BERT...")
         membank = np.zeros((ndocs, args.feat_dim), dtype=np.float32)
         with torch.no_grad():
@@ -204,7 +241,7 @@ def run_training(args):
                 feats = model.encoder.encode_batch(texts_batch, device=device, max_len=args.max_len)
                 membank[i:i+args.bert_batch] = feats.cpu().numpy()
         
-        # Build base X for this epoch (constant except for mini-batch updates)
+        # Build base X for this epoch
         X_docs = torch.tensor(membank, dtype=torch.float32, device=device)
         X_words = torch.zeros((nwords, args.feat_dim), dtype=torch.float32, device=device)
         X_full_base = torch.cat([X_docs, X_words], dim=0)
@@ -217,20 +254,12 @@ def run_training(args):
             batch_idx = doc_indices[i:i+args.batch_size]
             texts_batch = [texts[j] for j in batch_idx]
             
-            # PAPER SECTION 3.3: "During each iteration, we sample a mini batch from both 
-            # labeled and unlabeled document nodes with the index set B = {b0, b1...bn}...
-            # We then compute their document embeddings M_B also using the current BERT 
-            # module and update the corresponding memories in M"
             feats_batch = model.encoder.encode_batch(texts_batch, device=device, max_len=args.max_len)
             logits_bert = model.aux_clf(feats_batch)
 
             # Construct X with updated batch rows
             X = X_full_base.clone()
             X[batch_idx, :] = feats_batch
-
-            # PAPER SECTION 3.3: "For back-propagation, M is considered as constant 
-            # except the records in B"
-            # This means we detach X_full_base but allow gradient flow through batch
             X = X.detach()
             X[batch_idx, :] = feats_batch  # These have gradients
 
@@ -264,7 +293,7 @@ def run_training(args):
         # Evaluation on labeled nodes
         model.eval()
         with torch.no_grad():
-            # Recompute memory bank for evaluation with updated BERT
+            # Recompute memory bank for evaluation
             membank_eval = np.zeros((ndocs, args.feat_dim), dtype=np.float32)
             for i in tqdm(range(0, ndocs, args.bert_batch), desc=f'Epoch {epoch} Eval Memory'):
                 texts_batch = texts[i:i+args.bert_batch]
