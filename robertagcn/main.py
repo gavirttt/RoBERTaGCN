@@ -1,5 +1,6 @@
 import argparse
 from train import run_training
+from train_cv import run_10fold_cv
 
 
 def parse_args():
@@ -53,6 +54,8 @@ def parse_args():
     # Testing
     p.add_argument('--quickrun', action='store_true', 
                    help='Run quick test with small data and 1 epoch')
+    p.add_argument('--cv', action='store_true',
+                   help='Run 10-fold cross-validation (as in paper)')
     
     return p.parse_args()
 
@@ -70,4 +73,7 @@ if __name__ == '__main__':
         args.max_len = 32
         print(f"   Epochs: {args.epochs}, Batch size: {args.batch_size}, Vocab: {args.max_vocab}")
     
-    run_training(args)
+    if args.cv:
+        run_10fold_cv(args)
+    else:
+        run_training(args)
