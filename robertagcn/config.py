@@ -34,7 +34,7 @@ SEED = 42               # Random seed for reproducibility
 # OPTIMIZATION
 # ============================================================================
 LR_GCN = 1e-3           # Learning rate for GCN (paper: 1e-3)
-LR_BERT = 2e-5          # Learning rate for BERT (paper: 1e-5, use smaller for stability)
+LR_BERT = 1e-5          # Learning rate for BERT (paper: 1e-5, use smaller for stability)
 WEIGHT_DECAY = 1e-4     # L2 regularization
 LAMBDA = 0.7            # Interpolation weight λ: Z = λ*Z_GCN + (1-λ)*Z_BERT (paper: 0.7)
 

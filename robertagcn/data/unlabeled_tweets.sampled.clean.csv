@@ -1,4 +1,4 @@
-pseudo_id,text,retweetCount,replyCount,likeCount,quoteCount,viewCount,bookmarkCount,createdAt,lang,isReply,pseudo_conversationId,pseudo_inReplyToUsername,pseudo_author_userName,author_isBlueVerified,label
+pseudo_id,text,retweetCount,replyCount,likeCount,quoteCount,viewCount,bookmarkCount,createdAt,lang,isReply,pseudo_conversationId,pseudo_inReplyToUsername,pseudo_author_userName,author_isBlueVerified,predicted_label
 759506718396250,"TINGNAN Nag-post ngayong araw si Senador Ronald Bato Dela Rosa ng kanyang get up look habang siya ay nasa Europa. Sa kanyang caption, sinabi nito na malamig pa rin pala daw sa naturang lugar. I via @981724042570614 [LINK]",0,0,0,0,18,0,2025-05-24 03:00:06+00:00,tl,False,759506718396250,,109044924689492,True,
 205983270166610,"Juiceko ko, ano na Pilipinas? #Eleksyon2025 #Election2025PH",0,0,0,0,193,0,2025-05-12 13:45:14+00:00,tl,False,205983270166610,,594491802576054,False,
 4829151711777,bumoto ng tama. bumoto nang tama. [LINK],0,0,1,0,49,0,2025-05-12 07:45:44+00:00,tl,False,4829151711777,,435056207526495,False,

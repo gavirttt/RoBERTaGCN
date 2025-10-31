@@ -59,9 +59,7 @@ Configuration presets:
     
     parser.add_argument('--unlabeled-data', type=str, default=None,
                        help='Override unlabeled data path')
-    
-    parser.add_argument('--social-weight', type=float, default=None,
-                       help='Override social edge weight')
+
     
     parser.add_argument('--epochs', type=int, default=None,
                        help='Override number of epochs')
@@ -86,9 +84,6 @@ def merge_config_with_args(config_dict, args):
     
     if args.unlabeled_data:
         config_dict['unlabeled_data'] = args.unlabeled_data
-    
-    if args.social_weight is not None:
-        config_dict['social_weight'] = args.social_weight
     
     if args.epochs is not None:
         config_dict['epochs'] = args.epochs
@@ -132,7 +127,6 @@ def print_config_summary(config):
     print(f"  Max vocab:     {config['max_vocab']}")
     print(f"  Min doc freq:  {config['min_df']}")
     print(f"  Window size:   {config['window_size']}")
-    print(f"  Social weight: {config['social_weight']}")
     
     print("\n[Output]")
     print(f"  Save dir:    {config['save_dir']}")
