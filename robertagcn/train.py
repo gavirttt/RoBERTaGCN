@@ -84,15 +84,6 @@ def load_tweets_from_csv(csv_path, column_mapping, has_labels=True):
 def read_separate_csv_data(labeled_path, unlabeled_path, column_mapping, quickrun=False):
     """
     Read labeled and unlabeled data from separate CSV files
-    
-    Args:
-        labeled_path: Path to labeled CSV
-        unlabeled_path: Path to unlabeled CSV (can be None)
-        column_mapping: Dict for column name mapping
-        quickrun: Whether to sample small subset
-    
-    Returns:
-        ids, texts, labels, label_map, social_edges
     """
     print("="*70)
     print("Loading data from separate files...")
@@ -130,34 +121,30 @@ def read_separate_csv_data(labeled_path, unlabeled_path, column_mapping, quickru
     
     print(f"\nCombined dataset: {len(combined_df)} total tweets")
     
-    # Normalize labels
+    # 1. Convert to integers
     def normalize_label(label):
         if pd.isna(label) or label in ['', 'nan', 'None', None]:
             return None
         try:
             label_float = float(label)
-            return int(label_float)
+            return int(label_float)  # Convert 0.0 → 0, 1.0 → 1, 2.0 → 2
         except (ValueError, TypeError):
             return None
-    
+
     combined_df['label'] = combined_df['label'].apply(normalize_label)
+
+    # 2. Create sorted label mapping (ONCE)
+    unique_labels = sorted([lab for lab in combined_df['label'] if lab is not None])
+    label_map = {label: idx for idx, label in enumerate(unique_labels)}  # This ensures 0→0, 1→1, 2→2
+
+    # 3. Apply the consistent mapping (ONCE)
+    labels = [label_map[lab] if lab is not None else None for lab in combined_df['label']]
     
     # Extract data
     texts = combined_df['text'].tolist()
     ids = combined_df['id'].tolist()
     authors = combined_df['author'].tolist()
     reply_to = combined_df['reply_to'].tolist()
-    
-    # Build label map and labels list
-    label_map = {}
-    labels = []
-    for lab in combined_df['label']:
-        if pd.isna(lab) or lab is None:
-            labels.append(None)
-        else:
-            if lab not in label_map:
-                label_map[lab] = len(label_map)
-            labels.append(label_map[lab])
     
     # Statistics
     labeled_count = sum(1 for y in labels if y is not None)
@@ -168,6 +155,12 @@ def read_separate_csv_data(labeled_path, unlabeled_path, column_mapping, quickru
     print(f"  Labeled: {labeled_count}")
     print(f"  Unlabeled: {unlabeled_count}")
     print(f"  Classes: {label_map}")
+    
+    # Add label mapping verification
+    print("\nLabel mapping verification:")
+    sentiment_names = {0: "Positive", 1: "Negative", 2: "Neutral"}
+    for orig_label, mapped_idx in sorted(label_map.items()):
+        print(f"  Original: {orig_label} → Mapped index: {mapped_idx} → {sentiment_names[orig_label]}")
     
     if labeled_count > 0:
         label_counts = {}
