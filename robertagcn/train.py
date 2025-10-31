@@ -8,12 +8,12 @@ from scipy import sparse
 from sklearn.metrics import confusion_matrix, classification_report
 import matplotlib.pyplot as plt
 import seaborn as sns
-import pandas as pd
-
+import pandas as pd # Re-adding pandas as it's used in plot_confusion_matrix
 from utils import set_seed
 from data.build_graph import build_text_graph
 from models.bertgcn import BertGCN
 from early_stopping import EarlyStopping
+from data.data_loader import read_separate_csv_data # Import the new data loader functions
 
 from math import ceil
 
@@ -24,176 +24,6 @@ def sparse_to_torch_sparse_tensor(sparse_mx):
     values = torch.from_numpy(sparse_mx.data)
     shape = sparse_mx.shape
     return torch.sparse_coo_tensor(indices, values, torch.Size(shape))
-
-
-def load_tweets_from_csv(csv_path, column_mapping, has_labels=True):
-    """
-    Load tweets from CSV with flexible column mapping
-    
-    Args:
-        csv_path: Path to CSV file
-        column_mapping: Dict mapping standard names to actual column names
-        has_labels: Whether this CSV contains labels
-    
-    Returns:
-        DataFrame with standardized columns
-    """
-    df = pd.read_csv(csv_path, keep_default_na=False)
-    
-    # Standardize column names
-    rename_map = {}
-    for std_name, actual_name in column_mapping.items():
-        if actual_name in df.columns:
-            rename_map[actual_name] = std_name
-    
-    df = df.rename(columns=rename_map)
-    
-    # Ensure required columns exist
-    if 'id' not in df.columns:
-        df['id'] = df.index.astype(str)
-    
-    if 'text' not in df.columns:
-        raise ValueError(f"Text column not found in {csv_path}")
-    
-    # Handle labels
-    if has_labels:
-        if 'label' not in df.columns:
-            raise ValueError(f"Label column not found in {csv_path}")
-    else:
-        df['label'] = None
-    
-    # Handle social columns (optional)
-    if 'author' not in df.columns:
-        df['author'] = None
-    if 'reply_to' not in df.columns:
-        df['reply_to'] = None
-    
-    # Clean up data types
-    df['id'] = df['id'].astype(str)
-    df['text'] = df['text'].astype(str)
-    df['author'] = df['author'].astype(str)
-    df['reply_to'] = df['reply_to'].astype(str)
-    
-    # Clean empty strings
-    df['author'] = df['author'].replace(['', 'nan', 'None'], None)
-    df['reply_to'] = df['reply_to'].replace(['', 'nan', 'None'], None)
-    
-    return df
-
-
-def read_separate_csv_data(labeled_path, unlabeled_path, column_mapping, quickrun=False):
-    """
-    Read labeled and unlabeled data from separate CSV files
-    """
-    print("="*70)
-    print("Loading data from separate files...")
-    print("="*70)
-    
-    # Load labeled data
-    print(f"Loading labeled data from: {labeled_path}")
-    labeled_df = load_tweets_from_csv(labeled_path, column_mapping, has_labels=True)
-    print(f"  Loaded {len(labeled_df)} labeled tweets")
-    
-    # Load unlabeled data (if provided)
-    if unlabeled_path:
-        print(f"Loading unlabeled data from: {unlabeled_path}")
-        unlabeled_df = load_tweets_from_csv(unlabeled_path, column_mapping, has_labels=False)
-        print(f"  Loaded {len(unlabeled_df)} unlabeled tweets")
-    else:
-        print("No unlabeled data provided (supervised-only mode)")
-        unlabeled_df = pd.DataFrame()
-    
-    # Quick run sampling
-    if quickrun:
-        print("\nQUICKRUN MODE: Sampling data...")
-        sample_each = 100
-        if len(labeled_df) > sample_each:
-            labeled_df = labeled_df.sample(n=sample_each, random_state=42)
-        if len(unlabeled_df) > sample_each:
-            unlabeled_df = unlabeled_df.sample(n=sample_each, random_state=42)
-        print(f"  Sampled {len(labeled_df)} labeled + {len(unlabeled_df)} unlabeled")
-    
-    # Combine datasets
-    if not unlabeled_df.empty:
-        combined_df = pd.concat([labeled_df, unlabeled_df], ignore_index=True)
-    else:
-        combined_df = labeled_df
-    
-    print(f"\nCombined dataset: {len(combined_df)} total tweets")
-    
-    # 1. Convert to integers
-    def normalize_label(label):
-        if pd.isna(label) or label in ['', 'nan', 'None', None]:
-            return None
-        try:
-            label_float = float(label)
-            return int(label_float)  # Convert 0.0 → 0, 1.0 → 1, 2.0 → 2
-        except (ValueError, TypeError):
-            return None
-
-    combined_df['label'] = combined_df['label'].apply(normalize_label)
-
-    # 2. Create sorted label mapping (ONCE)
-    unique_labels = sorted([lab for lab in combined_df['label'] if lab is not None])
-    label_map = {label: idx for idx, label in enumerate(unique_labels)}  # This ensures 0→0, 1→1, 2→2
-
-    # 3. Apply the consistent mapping (ONCE)
-    labels = [label_map[lab] if lab is not None else None for lab in combined_df['label']]
-    
-    # Extract data
-    texts = combined_df['text'].tolist()
-    ids = combined_df['id'].tolist()
-    authors = combined_df['author'].tolist()
-    reply_to = combined_df['reply_to'].tolist()
-    
-    # Statistics
-    labeled_count = sum(1 for y in labels if y is not None)
-    unlabeled_count = len(labels) - labeled_count
-    
-    print(f"\nDataset statistics:")
-    print(f"  Total tweets: {len(labels)}")
-    print(f"  Labeled: {labeled_count}")
-    print(f"  Unlabeled: {unlabeled_count}")
-    print(f"  Classes: {label_map}")
-    
-    # Add label mapping verification
-    print("\nLabel mapping verification:")
-    sentiment_names = {0: "Positive", 1: "Negative", 2: "Neutral"}
-    for orig_label, mapped_idx in sorted(label_map.items()):
-        print(f"  Original: {orig_label} → Mapped index: {mapped_idx} → {sentiment_names[orig_label]}")
-    
-    if labeled_count > 0:
-        label_counts = {}
-        for lab in labels:
-            if lab is not None:
-                label_counts[lab] = label_counts.get(lab, 0) + 1
-        print(f"  Label distribution: {label_counts}")
-    
-    # Build social edges dictionary
-    social_edges = {
-        'authors': authors,
-        'reply_to': reply_to,
-        'doc_ids': ids
-    }
-    
-    # Social statistics
-    author_counts = {}
-    reply_count = 0
-    
-    for author in authors:
-        if author and author not in ['None', 'nan', '']:
-            author_counts[author] = author_counts.get(author, 0) + 1
-    
-    reply_count = sum(1 for r in reply_to if r and r not in ['None', 'nan', ''])
-    
-    multi_tweet_authors = sum(1 for count in author_counts.values() if count > 1)
-    
-    print(f"\nSocial network statistics:")
-    print(f"  Unique authors: {len(author_counts)}")
-    print(f"  Authors with multiple tweets: {multi_tweet_authors}")
-    print(f"  Reply relationships: {reply_count}")
-    
-    return ids, texts, labels, label_map, social_edges
 
 
 def prefinetune_bert(model, texts, labels, label_map, device, config):
@@ -267,13 +97,13 @@ def run_training(config):
     set_seed(config.get('seed', 42))
     
     print("="*70)
-    print("BertGCN Training with Social Edges")
+    print("BertGCN Training")
     print("="*70)
     print(f"Device: {device}")
     print(f"Mode: {config.get('mode', 'train')}")
     
-    # Load data
-    ids, texts, labels, label_map, social_edges = read_separate_csv_data(
+    # Load data (, social_edges)
+    ids, texts, labels, label_map = read_separate_csv_data(
         labeled_path=config['labeled_data'],
         unlabeled_path=config.get('unlabeled_data'),
         column_mapping=config.get('column_mapping', {}),
@@ -289,18 +119,16 @@ def run_training(config):
     else:
         raise ValueError("No labeled data found!")
     
-    # Build graph with social edges
+    # Build graph
     print("\n" + "="*70)
-    print("Building heterogeneous graph with social edges...")
+    print("Building heterogeneous graph...")
     print("="*70)
     
     A_norm, vocab, doc_word = build_text_graph(
         texts,
         max_features=config.get('max_vocab', 20000),
         min_df=config.get('min_df', 2),
-        window_size=config.get('window_size', 20),
-        social_edges=social_edges,
-        social_weight=config.get('social_weight', 1.0)
+        window_size=config.get('window_size', 20)
     )
     
     nwords = doc_word.shape[1]
@@ -379,8 +207,13 @@ def run_training(config):
         
         # Build base feature matrix
         X_docs = torch.tensor(membank, dtype=torch.float32, device=device)
-        X_words = torch.zeros((nwords, config.get('feat_dim', 768)), 
-                             dtype=torch.float32, device=device)
+        
+        # Initialize word features using BERT encoder
+        print(f"Epoch {epoch}/{config.get('epochs', 10)}: Encoding word features...")
+        X_words = model.encoder.encode_words(vocab, device=device, 
+                                             max_len=config.get('max_len', 64), 
+                                             batch_size=config.get('bert_batch', 32))
+        
         X_full_base = torch.cat([X_docs, X_words], dim=0)
         
         # Training loop
@@ -437,7 +270,7 @@ def run_training(config):
         
         # Evaluation - get validation loss for early stopping
         val_loss = evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, 
-                                           X_words, n_classes, device, config, epoch)
+                                           vocab, n_classes, device, config, epoch)
         
         # Early stopping check
         early_stopping(val_loss, model, epoch, config)
@@ -457,7 +290,7 @@ def run_training(config):
         print(f"Best validation loss: {early_stopping.val_loss_min:.6f}")
     print("="*70)
 
-def evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, X_words, 
+def evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, vocab, 
                            n_classes, device, config, epoch):
     """Evaluate model and return validation loss"""
     model.eval()
@@ -465,18 +298,24 @@ def evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, X_words
     nwords = A_torch.shape[0] - ndocs
     
     with torch.no_grad():
-        # Recompute memory bank
+        # Recompute memory bank for documents
         membank_eval = np.zeros((ndocs, config.get('feat_dim', 768)), dtype=np.float32)
         
         for i in tqdm(range(0, ndocs, config.get('bert_batch', 32)), 
-                     desc='Eval', leave=False):
+                     desc='Eval Docs', leave=False):
             texts_batch = texts[i:i+config.get('bert_batch', 32)]
             feats = model.encoder.encode_batch(texts_batch, device=device, 
                                               max_len=config.get('max_len', 64))
             membank_eval[i:i+config.get('bert_batch', 32)] = feats.cpu().numpy()
         
         X_docs = torch.tensor(membank_eval, dtype=torch.float32, device=device)
-        X_full = torch.cat([X_docs, X_words], dim=0)
+        
+        # Recompute word features
+        X_words_eval = model.encoder.encode_words(vocab, device=device, 
+                                                  max_len=config.get('max_len', 64), 
+                                                  batch_size=config.get('bert_batch', 32))
+        
+        X_full = torch.cat([X_docs, X_words_eval], dim=0)
         
         # GCN predictions
         gcn_logits_all = model.gcn_forward(A_torch, X_full)
@@ -519,25 +358,32 @@ def evaluate_model_with_loss(model, texts, labels, labeled_idx, A_torch, X_words
     
     return val_loss
 
-def evaluate_model(model, texts, labels, labeled_idx, A_torch, X_words, 
+def evaluate_model(model, texts, labels, labeled_idx, A_torch, vocab, 
                    n_classes, device, config, epoch):
     """Evaluate model on labeled data"""
     model.eval()
     ndocs = len(texts)
+    nwords = A_torch.shape[0] - ndocs # Need nwords here for X_words_eval
     
     with torch.no_grad():
-        # Recompute memory bank
+        # Recompute memory bank for documents
         membank_eval = np.zeros((ndocs, config.get('feat_dim', 768)), dtype=np.float32)
         
         for i in tqdm(range(0, ndocs, config.get('bert_batch', 32)), 
-                     desc='Eval', leave=False):
+                     desc='Eval Docs', leave=False):
             texts_batch = texts[i:i+config.get('bert_batch', 32)]
             feats = model.encoder.encode_batch(texts_batch, device=device, 
                                               max_len=config.get('max_len', 64))
             membank_eval[i:i+config.get('bert_batch', 32)] = feats.cpu().numpy()
         
         X_docs = torch.tensor(membank_eval, dtype=torch.float32, device=device)
-        X_full = torch.cat([X_docs, X_words], dim=0)
+        
+        # Recompute word features
+        X_words_eval = model.encoder.encode_words(vocab, device=device, 
+                                                  max_len=config.get('max_len', 64), 
+                                                  batch_size=config.get('bert_batch', 32))
+        
+        X_full = torch.cat([X_docs, X_words_eval], dim=0)
         
         # GCN predictions
         gcn_logits_all = model.gcn_forward(A_torch, X_full)

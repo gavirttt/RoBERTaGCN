@@ -1,5 +1,5 @@
 """
-BertGCN with Social Edges - Main Entry Point
+BertGCN - Main Entry Point
 
 Usage:
     python main.py                    # Use config.py settings
@@ -24,7 +24,7 @@ def load_config_from_file(config_path):
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='BertGCN: Transductive Text Classification with Social Edges',
+        description='BertGCN: Transductive Text Classification',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

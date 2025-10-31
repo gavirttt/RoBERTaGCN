@@ -5,7 +5,8 @@ import numpy as np
 from tqdm import tqdm
 import os
 
-from train import read_csv_data, sparse_to_torch_sparse_tensor
+from train import sparse_to_torch_sparse_tensor
+from data.data_loader import read_separate_csv_data
 from data.build_graph import build_text_graph
 from models.bertgcn import BertGCN
 
@@ -18,7 +19,13 @@ def load_model_and_predict(checkpoint_path, data_path, device='cuda'):
     print(f"Loaded checkpoint from epoch {checkpoint_path}")
     
     # Reload data
-    ids, texts, labels, label_map_loaded = read_csv_data(data_path)
+    # Assuming data_path is the labeled data, and no unlabeled data for extraction
+    ids, texts, labels, label_map_loaded = read_separate_csv_data(
+        labeled_path=data_path,
+        unlabeled_path=None, # No unlabeled data for extraction
+        column_mapping=args['column_mapping'],
+        quickrun=False # Not in quickrun mode for extraction
+    )
     ndocs = len(texts)
     
     # Rebuild graph (same as training)

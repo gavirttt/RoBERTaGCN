@@ -12,13 +12,13 @@ import pandas as pd
 from utils import set_seed
 from data.build_graph import build_text_graph
 from models.bertgcn import BertGCN
-from train import (sparse_to_torch_sparse_tensor, read_separate_csv_data, 
-                   prefinetune_bert, evaluate_model_with_loss)
+from train import (sparse_to_torch_sparse_tensor, prefinetune_bert, evaluate_model_with_loss)
+from data.data_loader import read_separate_csv_data
 from early_stopping import EarlyStopping  # Add this import
 from math import ceil
 
 
-def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, device, fold_num):
+def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, vocab, config, device, fold_num):
     """Train on train_idx, evaluate on val_idx with early stopping"""
     ndocs = len(texts)
     nwords = A_torch.shape[0] - ndocs
@@ -65,8 +65,13 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
                 membank[i:i+config.get('bert_batch', 32)] = feats.cpu().numpy()
         
         X_docs = torch.tensor(membank, dtype=torch.float32, device=device)
-        X_words = torch.zeros((nwords, config.get('feat_dim', 768)), 
-                             dtype=torch.float32, device=device)
+        
+        # Initialize word features using BERT encoder
+        # vocab is available from run_Kfold_cv scope
+        X_words = model.encoder.encode_words(vocab, device=device, 
+                                             max_len=config.get('max_len', 64), 
+                                             batch_size=config.get('bert_batch', 32))
+        
         X_full_base = torch.cat([X_docs, X_words], dim=0)
         
         # Training loop
@@ -114,7 +119,7 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
         avg_loss = float(np.mean(losses)) if losses else 0.0
         
         # Evaluation every epoch for early stopping
-        val_metrics = evaluate_fold_with_loss(model, texts, labels, val_idx, A_torch, config, device)
+        val_metrics = evaluate_fold_with_loss(model, texts, labels, val_idx, A_torch, vocab, config, device)
         val_loss = val_metrics['val_loss']
         
         # Store training history
@@ -163,7 +168,7 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, config, de
     return best_epoch_metrics
 
 
-def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, device):
+def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, vocab, config, device):
     """Evaluate on eval_idx and return metrics including loss"""
     model.eval()
     ndocs = len(texts)
@@ -171,7 +176,7 @@ def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, dev
     n_classes = max([lab for lab in labels if lab is not None]) + 1
     
     with torch.no_grad():
-        # Recompute memory bank
+        # Recompute memory bank for documents
         membank_eval = np.zeros((ndocs, config.get('feat_dim', 768)), dtype=np.float32)
         for i in range(0, ndocs, config.get('bert_batch', 32)):
             texts_batch = texts[i:i+config.get('bert_batch', 32)]
@@ -180,9 +185,13 @@ def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, dev
             membank_eval[i:i+config.get('bert_batch', 32)] = feats.cpu().numpy()
         
         X_docs = torch.tensor(membank_eval, dtype=torch.float32, device=device)
-        X_words = torch.zeros((nwords, config.get('feat_dim', 768)), 
-                             dtype=torch.float32, device=device)
-        X_full = torch.cat([X_docs, X_words], dim=0)
+        
+        # Recompute word features (vocab is available from run_Kfold_cv scope)
+        X_words_eval = model.encoder.encode_words(vocab, device=device, 
+                                                  max_len=config.get('max_len', 64), 
+                                                  batch_size=config.get('bert_batch', 32))
+        
+        X_full = torch.cat([X_docs, X_words_eval], dim=0)
         
         # Predictions
         gcn_logits_all = model.gcn_forward(A_torch, X_full)
@@ -231,9 +240,9 @@ def evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, dev
         return metrics
 
 
-def evaluate_fold(model, texts, labels, eval_idx, A_torch, config, device):
+def evaluate_fold(model, texts, labels, eval_idx, A_torch, vocab, config, device):
     """Original evaluate_fold without loss calculation (for backward compatibility)"""
-    metrics = evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, config, device)
+    metrics = evaluate_fold_with_loss(model, texts, labels, eval_idx, A_torch, vocab, config, device)
     # Remove val_loss for compatibility with existing code
     metrics.pop('val_loss', None)
     return metrics
@@ -251,7 +260,7 @@ def run_Kfold_cv(config):
     print(f"Early stopping patience: {config.get('early_stopping_patience', 5)}")
     
     # Load data
-    ids, texts, labels, label_map, social_edges = read_separate_csv_data(
+    ids, texts, labels, label_map = read_separate_csv_data(
         labeled_path=config['labeled_data'],
         unlabeled_path=config.get('unlabeled_data'),
         column_mapping=config.get('column_mapping', {}),
@@ -270,7 +279,7 @@ def run_Kfold_cv(config):
     
     # Build graph (transductive - includes all data)
     print("\n" + "="*70)
-    print("Building graph with social edges (all data)...")
+    print("Building graph (all data)...")
     print("="*70)
     
     A_norm, vocab, doc_word = build_text_graph(
@@ -278,8 +287,6 @@ def run_Kfold_cv(config):
         max_features=config.get('max_vocab', 20000),
         min_df=config.get('min_df', 2),
         window_size=config.get('window_size', 20),
-        social_edges=social_edges,
-        social_weight=config.get('social_weight', 1.0)
     )
     
     nwords = doc_word.shape[1]
@@ -317,7 +324,7 @@ def run_Kfold_cv(config):
         
         # Train and evaluate fold with early stopping
         metrics = train_one_fold(model, texts, labels, train_idx, val_idx, 
-                                A_torch, config, device, fold)
+                                A_torch, vocab, config, device, fold)
         
         fold_results.append(metrics)
         all_y_true.extend(metrics['y_true'])

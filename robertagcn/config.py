@@ -1,5 +1,5 @@
 """
-Configuration file for BertGCN with Social Edges
+Configuration file for BertGCN
 Edit these parameters instead of using command-line arguments
 """
 
@@ -44,7 +44,6 @@ LAMBDA = 0.7            # Interpolation weight λ: Z = λ*Z_GCN + (1-λ)*Z_BERT 
 MAX_VOCAB = 20000       # Maximum vocabulary size
 MIN_DOC_FREQ = 2        # Minimum document frequency for words
 WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
-SOCIAL_WEIGHT = 1.0     # Weight for social interaction edges (0 = disable)
 
 # ============================================================================
 # EARLY STOPPING PARAMETERS
@@ -62,7 +61,7 @@ PLOT_CONFUSION_MATRIX = True  # Save confusion matrix plots
 # ============================================================================
 # EXPERIMENT MODE
 # ============================================================================
-RUN_MODE = 'train'      # Options: 'train', 'cv', 'quickrun'
+RUN_MODE = 'cv'      # Options: 'train', 'cv', 'quickrun'
 FOLD = 5                 # Number of folds for cross-validation
 # 'train' = normal training
 # 'cv' = 10-fold cross-validation
@@ -76,8 +75,6 @@ COLUMN_MAPPING = {
     'id': 'pseudo_id',                          # Document ID column
     'text': 'text',                             # Text content column
     'label': 'predicted_label',                 # Label column (for labeled data)
-    'author': 'pseudo_author_userName',         # Author username column
-    'reply_to': 'pseudo_inReplyToUsername',     # Reply-to username column
 }
 
 # ============================================================================
@@ -108,7 +105,6 @@ def get_config(preset='default'):
     - 'quickrun': Fast testing configuration
     - 'low_resource': For limited GPU memory (e.g., MX450)
     - 'high_quality': Best quality, requires good GPU
-    - 'social_heavy': Emphasizes social edges
     """
     
     config = {
@@ -130,7 +126,6 @@ def get_config(preset='default'):
         'max_vocab': MAX_VOCAB,
         'min_df': MIN_DOC_FREQ,
         'window_size': WINDOW_SIZE,
-        'social_weight': SOCIAL_WEIGHT,
         'save_dir': SAVE_DIR,
         'plot_cm': PLOT_CONFUSION_MATRIX,
         'mode': RUN_MODE,
@@ -176,13 +171,6 @@ def get_config(preset='default'):
             'dropout': 0.3,
         })
     
-    elif preset == 'social_heavy':
-        config.update({
-            'social_weight': 2.0,
-            'lmbda': 0.8,  # Favor GCN (which includes social edges)
-            'epochs': 40,
-        })
-    
     return config
 
 
@@ -209,9 +197,6 @@ def validate_config(config):
     
     if config['dropout'] < 0 or config['dropout'] > 1:
         errors.append(f"Dropout must be in [0, 1], got {config['dropout']}")
-    
-    if config['social_weight'] < 0:
-        errors.append(f"Social weight must be >= 0, got {config['social_weight']}")
     
     if config['epochs'] < 1:
         errors.append(f"Epochs must be >= 1, got {config['epochs']}")
