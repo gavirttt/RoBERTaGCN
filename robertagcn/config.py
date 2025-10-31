@@ -41,7 +41,7 @@ LAMBDA = 0.7            # Interpolation weight λ: Z = λ*Z_GCN + (1-λ)*Z_BERT 
 # ============================================================================
 # GRAPH CONSTRUCTION
 # ============================================================================
-MAX_VOCAB = 20000       # Maximum vocabulary size
+MAX_VOCAB = 100000       # Maximum vocabulary size
 MIN_DOC_FREQ = 2        # Minimum document frequency for words
 WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
 

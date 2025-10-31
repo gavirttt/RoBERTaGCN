@@ -95,25 +95,39 @@ def build_text_graph(texts, max_features=20000, min_df=2, window_size=20):
     # Convert to COO for efficient iteration
     cooc_coo = cooc_matrix.tocoo()
     
-    # Calculate PPMI
-    new_data = []
-    for i, j, count in zip(cooc_coo.row, cooc_coo.col, cooc_coo.data):
-        if i < j and count > 0:  # Only process upper triangle
-            p_ij = count / total_pairs
-            p_i = word_freq[i] / word_freq.sum()
-            p_j = word_freq[j] / word_freq.sum()
-            
-            pmi = np.log(p_ij / (p_i * p_j)) if (p_i * p_j) > 0 else 0
-            ppmi = max(pmi, 0)
-            
-            new_data.append(ppmi)
-        elif i == j:
-            new_data.append(0.0)  # No self-loops in PPMI
+    # Calculate PPMI and build symmetric data
+    new_rows, new_cols, new_data = [], [], []
     
-    # Create symmetric PPMI matrix
+    # Calculate total sum of word frequencies for normalization
+    total_word_freq_sum = word_freq.sum()
+    
+    for i, j, count in zip(cooc_coo.row, cooc_coo.col, cooc_coo.data):
+        if count > 0:
+            p_ij = count / total_pairs
+            
+            # Handle cases where word_freq[i] or word_freq[j] might be zero
+            # This can happen if a word appears in co-occurrence but not in word_freq sum (e.g., due to filtering)
+            p_i = word_freq[i] / total_word_freq_sum if total_word_freq_sum > 0 else 0
+            p_j = word_freq[j] / total_word_freq_sum if total_word_freq_sum > 0 else 0
+            
+            if p_i > 0 and p_j > 0:
+                pmi = np.log(p_ij / (p_i * p_j))
+                ppmi = max(pmi, 0)
+            else:
+                ppmi = 0.0 # If probabilities are zero, PPMI is zero
+            
+            new_rows.append(i)
+            new_cols.append(j)
+            new_data.append(ppmi)
+        else:
+            # If count is 0, PPMI is 0
+            new_rows.append(i)
+            new_cols.append(j)
+            new_data.append(0.0)
+            
+    # Create PPMI matrix
     word_word_ppmi = sparse.coo_matrix(
-        (new_data * 2, (list(cooc_coo.row) + list(cooc_coo.col), 
-                        list(cooc_coo.col) + list(cooc_coo.row))),
+        (new_data, (new_rows, new_cols)),
         shape=(nwords, nwords)
     ).tocsr()
     
