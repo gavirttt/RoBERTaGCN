@@ -112,10 +112,13 @@ def print_config_summary(config):
     
     print("\n[Training]")
     print(f"  Mode:        {config.get('mode', 'train')}")
+    if config.get('mode', 'train') == 'cv':
+        print(f"  Folds:       {config.get('fold', 10)}")
     print(f"  Epochs:      {config['epochs']}")
     print(f"  Batch size:  {config['batch_size']}")
     print(f"  BERT batch:  {config['bert_batch']}")
     print(f"  Max length:  {config['max_len']}")
+    print(f"  Batch Ratio:  {config['labeled_ratio_in_batch']}")
     
     print("\n[Optimization]")
     print(f"  LR (GCN):      {config['lr_gcn']}")

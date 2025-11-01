@@ -9,38 +9,87 @@ from math import ceil
 
 def train_epoch(model, texts, labels, train_idx, A_torch, vocab, 
                 optimizer, loss_fn, device, config, epoch, prefix=''):
-    """Unified training for one epoch"""
+    """
+    Unified training for one epoch
+    
+    FIXED: Sample from both labeled AND unlabeled nodes (Paper Section 3.3)
+    Loss is only computed on labeled nodes
+    """
     model.train()
     
     # Refresh memory bank at epoch start (Paper Section 3.3)
     if config.get('refresh_memory', True):
         refresh_memory_bank(model, texts, device, config)
     
-    # Shuffle training indices
+    # Get labeled and unlabeled indices
+    labeled_set = set(train_idx)
+    all_doc_idx = list(range(len(texts)))
+    unlabeled_idx = [i for i in all_doc_idx if i not in labeled_set]
+    
+    # Shuffle both sets
     np.random.shuffle(train_idx)
+    np.random.shuffle(unlabeled_idx)
+    
+    # Determine batch composition
+    batch_size = config.get('batch_size', 32)
+    
+    # Paper: "sample a mini batch from both labeled and unlabeled document nodes"
+    # Strategy: Mix labeled and unlabeled in each batch
+    if unlabeled_idx:
+        # Use 50/50 split or configure ratio
+        labeled_ratio = config.get('labeled_ratio_in_batch', 0.5)
+        labeled_per_batch = max(1, int(batch_size * labeled_ratio))
+        unlabeled_per_batch = batch_size - labeled_per_batch
+    else:
+        # No unlabeled data (supervised-only mode)
+        labeled_per_batch = batch_size
+        unlabeled_per_batch = 0
+    
+    num_batches = ceil(len(train_idx) / labeled_per_batch)
     
     losses = []
-    batch_size = config.get('batch_size', 32)
-    num_batches = ceil(len(train_idx) / batch_size)
-    
     pbar = tqdm(range(num_batches), desc=f'{prefix} Epoch {epoch}', leave=True)
     
     for batch_num in pbar:
-        start_idx = batch_num * batch_size
-        end_idx = min((batch_num + 1) * batch_size, len(train_idx))
-        batch_idx = train_idx[start_idx:end_idx]
+        # Sample labeled nodes
+        start_idx = batch_num * labeled_per_batch
+        end_idx = min((batch_num + 1) * labeled_per_batch, len(train_idx))
+        batch_labeled = train_idx[start_idx:end_idx]
         
-        # Forward pass
+        # Sample unlabeled nodes (if available)
+        if unlabeled_idx and unlabeled_per_batch > 0:
+            # Random sampling with replacement if needed
+            n_unlabeled_sample = min(unlabeled_per_batch, len(unlabeled_idx))
+            batch_unlabeled = np.random.choice(
+                unlabeled_idx, 
+                size=n_unlabeled_sample, 
+                replace=False
+            ).tolist()
+        else:
+            batch_unlabeled = []
+        
+        # Combine labeled and unlabeled
+        batch_idx = batch_labeled + batch_unlabeled
+        
+        # Forward pass on ENTIRE batch (labeled + unlabeled)
+        # This updates memory bank for both types of nodes
         log_probs = model(
             idx=batch_idx, A_torch=A_torch, vocab=vocab,
             texts=texts, device=device, config=config, update_memory=True
         )
         
-        # Compute loss (all examples in batch are labeled)
-        target_labels = torch.tensor([labels[i] for i in batch_idx], 
-                                    dtype=torch.long, device=device)
+        # Compute loss ONLY on labeled subset
+        # Extract predictions for labeled nodes (they're at the start of batch_idx)
+        labeled_positions = list(range(len(batch_labeled)))
+        labeled_log_probs = log_probs[labeled_positions]
         
-        loss = loss_fn(log_probs, target_labels)
+        target_labels = torch.tensor(
+            [labels[i] for i in batch_labeled], 
+            dtype=torch.long, 
+            device=device
+        )
+        
+        loss = loss_fn(labeled_log_probs, target_labels)
         
         optimizer.zero_grad()
         loss.backward()
@@ -51,7 +100,11 @@ def train_epoch(model, texts, labels, train_idx, A_torch, vocab,
         optimizer.step()
         
         losses.append(loss.item())
-        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        pbar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'labeled': len(batch_labeled),
+            'unlabeled': len(batch_unlabeled)
+        })
     
     return {'loss': np.mean(losses) if losses else 0.0}
 

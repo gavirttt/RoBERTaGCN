@@ -25,10 +25,11 @@ DROPOUT = 0.5           # Dropout rate (paper: 0.5)
 # TRAINING PARAMETERS
 # ============================================================================
 EPOCHS = 10
-BATCH_SIZE = 32         # Mini-batch size for GCN training
-BERT_BATCH_SIZE = 32    # Batch size for BERT encoding
-MAX_LENGTH = 128        # Max sequence length for tokenization
-SEED = 42               # Random seed for reproducibility
+BATCH_SIZE = 32                 # Mini-batch size for GCN training
+BERT_BATCH_SIZE = 32            # Batch size for BERT encoding
+MAX_LENGTH = 128                # Max sequence length for tokenization
+SEED = 42                       # Random seed for reproducibility
+LABELED_RATIO_IN_BATCH = 0.5    # Ratio of labeled nodes in each batch (0.5 = 50/50 split)
 
 # ============================================================================
 # OPTIMIZATION
@@ -48,7 +49,7 @@ WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
 # ============================================================================
 # EARLY STOPPING PARAMETERS
 # ============================================================================
-EARLY_STOPPING_PATIENCE = 3           # Number of epochs to wait for improvement
+EARLY_STOPPING_PATIENCE = 5           # Number of epochs to wait for improvement
 EARLY_STOPPING_DELTA = 0              # Minimum change to qualify as improvement
 SAVE_BEST_ONLY = True                 # Save only the best model
 
@@ -137,6 +138,7 @@ def get_config(preset='default'):
         'early_stopping_delta': EARLY_STOPPING_DELTA,
         'save_best_only': SAVE_BEST_ONLY,
         'fold': FOLD,
+        'labeled_ratio_in_batch': LABELED_RATIO_IN_BATCH,
     }
     
     if preset == 'quickrun':
@@ -146,7 +148,7 @@ def get_config(preset='default'):
             'bert_batch': 8,
             'max_vocab': 1000,
             'max_len': 32,
-            'prefinetune': False,
+            'prefinetune': True,
             'early_stopping_patience': 2,  # Quick stopping for quickrun
         })
     
