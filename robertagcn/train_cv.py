@@ -60,9 +60,6 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, vocab, con
     # Initialize memory bank with current BERT embeddings
     refresh_memory_bank(model, texts, device, config)
     
-    # Cache word features
-    model.encode_and_cache_words(vocab, device, config)
-    
     # FIXED: Use the unified training approach that only uses labeled data
     for epoch in range(1, config.get('epochs', 10) + 1):
         # Train for one epoch using only labeled training indices

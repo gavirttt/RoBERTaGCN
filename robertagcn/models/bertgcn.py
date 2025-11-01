@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from .roberta_encoder import RobertaTagalogEncoder
 from .gcn import SimpleGCN
 
-
 class BertGCN(nn.Module):
     """
     BertGCN model combining BERT and GCN for transductive text classification
@@ -29,41 +28,29 @@ class BertGCN(nn.Module):
         self.memory_bank = None
         self.memory_initialized = False
         
-        # Cache for word features
-        self.word_features = None
-        self.vocab_cached = None
+        # REMOVED: Cache for word features (paper uses zeros)
+        # self.word_features = None
+        # self.vocab_cached = None
 
     def initialize_memory_bank(self, ndocs, feat_dim, device):
         """Initialize memory bank with zeros - FIXED GRADIENT FLOW"""
-        # Create memory bank that requires grad but we'll handle updates carefully
         self.memory_bank = torch.zeros((ndocs, feat_dim), device=device, requires_grad=False)
         self.memory_initialized = True
 
     def update_memory_batch(self, batch_idx, batch_embeddings):
         """Update memory bank with proper gradient handling - FIXED VERSION"""
         if self.memory_bank is not None:
-            # CRITICAL FIX: Use in-place updates with proper gradient isolation
             with torch.no_grad():
-                # Update memory bank entries for current batch
-                # Detach to prevent gradients flowing through memory bank history
                 self.memory_bank[batch_idx] = batch_embeddings.detach()
 
     def get_memory_bank(self):
         """Get current memory bank"""
         return self.memory_bank
 
-    def encode_and_cache_words(self, vocab, device, config):
-        """Encode all words once and cache them"""
-        print("Encoding and caching word features...")
-        with torch.no_grad():
-            self.word_features = self.encoder.encode_words(
-                vocab, 
-                device=device, 
-                max_len=config.get('max_len', 16), 
-                batch_size=config.get('bert_batch', 32)
-            )
-            self.vocab_cached = vocab
-        print(f"Cached {len(vocab)} word features")
+    # REMOVED: encode_and_cache_words method
+    # def encode_and_cache_words(self, vocab, device, config):
+    #     """Encode all words once and cache them"""
+    #     ...
 
     def bert_forward(self, texts, device='cuda', max_len=64):
         """Forward pass through BERT encoder and auxiliary classifier"""
@@ -92,9 +79,9 @@ class BertGCN(nn.Module):
         X_docs = self.memory_bank.detach().clone()  # Stop gradients from memory
         X_docs[idx] = feats_batch  # Allow gradients for current batch
         
-        # Word features (no gradients needed)
-        X_words = self.word_features if self.word_features is not None else \
-                torch.zeros((len(vocab), config['feat_dim']), device=device)
+        # FIXED: Word features are ZEROS (matching paper Equation 2)
+        # Paper: X = [X_doc; 0] where word nodes have zero features
+        X_words = torch.zeros((len(vocab), config['feat_dim']), device=device)
         
         X_full = torch.cat([X_docs, X_words], dim=0)
         

@@ -103,10 +103,7 @@ def run_training(config):
     
     # Initialize memory bank with BERT embeddings
     refresh_memory_bank(model, texts, device, config)
-    
-    # Cache word features
-    model.encode_and_cache_words(vocab, device, config)
-    
+
     # Setup early stopping
     early_stopping = EarlyStopping(
         patience=config.get('early_stopping_patience', 5),
