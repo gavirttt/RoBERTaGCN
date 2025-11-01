@@ -7,7 +7,7 @@ Edit these parameters instead of using command-line arguments
 # DATA FILES
 # ============================================================================
 LABELED_DATA = 'data/labeled_tweets.clean.csv'      # CSV with annotated tweets
-UNLABELED_DATA = 'data/unlabeled_tweets.clean.csv'  # CSV with unannotated tweets (optional)
+UNLABELED_DATA = 'data/unlabeled_tweets.sampled.clean.csv'  # CSV with unannotated tweets (optional)
 
 # Alternative: Use combined file (set UNLABELED_DATA = None)
 # LABELED_DATA = 'data/combined_tweets.clean.csv'
@@ -24,7 +24,7 @@ DROPOUT = 0.5           # Dropout rate (paper: 0.5)
 # ============================================================================
 # TRAINING PARAMETERS
 # ============================================================================
-EPOCHS = 100
+EPOCHS = 10
 BATCH_SIZE = 32         # Mini-batch size for GCN training
 BERT_BATCH_SIZE = 32    # Batch size for BERT encoding
 MAX_LENGTH = 128        # Max sequence length for tokenization
@@ -48,7 +48,7 @@ WINDOW_SIZE = 20        # Sliding window for PMI calculation (paper: 20)
 # ============================================================================
 # EARLY STOPPING PARAMETERS
 # ============================================================================
-EARLY_STOPPING_PATIENCE = 5           # Number of epochs to wait for improvement
+EARLY_STOPPING_PATIENCE = 3           # Number of epochs to wait for improvement
 EARLY_STOPPING_DELTA = 0              # Minimum change to qualify as improvement
 SAVE_BEST_ONLY = True                 # Save only the best model
 

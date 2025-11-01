@@ -40,7 +40,8 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, vocab, con
         patience=config.get('early_stopping_patience', 5),
         verbose=config.get('verbose', False),
         delta=config.get('early_stopping_delta', 0),
-        save_path=os.path.join(config.get('save_dir', 'checkpoints'), f'best_model_fold{fold_num}.pt')
+        save_path=os.path.join(config.get('save_dir', 'checkpoints'), f'best_model_fold{fold_num}.pt'),
+        mode='max'  # Using validation F1 for early stopping
     )
     
     best_val_f1 = 0.0
@@ -96,7 +97,7 @@ def train_one_fold(model, texts, labels, train_idx, val_idx, A_torch, vocab, con
               f"Val F1: {val_f1:.4f}")
         
         # Early stopping check
-        early_stopping(val_loss, model, epoch, config)
+        early_stopping(val_f1, model, epoch, config)
         
         if early_stopping.early_stop:
             print(f"Early stopping triggered for fold {fold_num} at epoch {epoch}")

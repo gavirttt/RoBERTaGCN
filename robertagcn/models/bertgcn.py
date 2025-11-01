@@ -77,49 +77,40 @@ class BertGCN(nn.Module):
         return logits
 
     def forward(self, idx, A_torch, vocab, texts, device, config, update_memory=True):
-        """
-        Full forward pass following paper methodology - FIXED GRADIENT FLOW
-        """
-        # Get texts for current batch
         texts_batch = [texts[i] for i in idx]
         
-        # Get BERT embeddings for current batch (gradients flow here)
-        feats_batch = self.encoder.encode_batch(texts_batch, device=device, 
-                                               max_len=config.get('max_len', 64))
+        # Get BERT embeddings for current batch WITH gradients
+        feats_batch = self.encoder.encode_batch(texts_batch, device=device, max_len=config.get('max_len', 64))
         
-        # Update memory bank with current batch embeddings (Section 3.3)
+        # Update memory bank (no gradients stored)
         if update_memory and self.memory_initialized:
-            self.update_memory_batch(idx, feats_batch)
+            with torch.no_grad():
+                self.memory_bank[idx] = feats_batch.detach()
         
-        # Get BERT classifier logits (Equation 5)
+        # Build feature matrix for GCN
+        # CRITICAL: Use detached memory bank + fresh batch embeddings with gradients
+        X_docs = self.memory_bank.detach().clone()  # Stop gradients from memory
+        X_docs[idx] = feats_batch  # Allow gradients for current batch
+        
+        # Word features (no gradients needed)
+        X_words = self.word_features if self.word_features is not None else \
+                torch.zeros((len(vocab), config['feat_dim']), device=device)
+        
+        X_full = torch.cat([X_docs, X_words], dim=0)
+        
+        # Get predictions
         bert_logits = self.aux_clf(feats_batch)
-        
-        # Build full feature matrix for GCN
-        if self.memory_initialized:
-            # Use memory bank for document features (no gradients from memory bank)
-            X_docs = self.get_memory_bank().clone()
-            
-            # CRITICAL FIX: Replace current batch with fresh embeddings (gradients flow here)
-            # This ensures gradients flow through current batch while memory bank provides context
-            X_docs[idx] = feats_batch  # Gradients flow through current batch
-            
-            # Word features (cached, no gradients)
-            if self.word_features is not None:
-                X_words = self.word_features
-            else:
-                X_words = torch.zeros((len(vocab), config.get('feat_dim', 768)), device=device)
-            
-            X_full = torch.cat([X_docs, X_words], dim=0)
-        else:
-            raise RuntimeError("Memory bank must be initialized before forward pass!")
-        
-        # GCN forward pass (Equation 4)
-        gcn_logits_all = self.gcn_forward(A_torch, X_full)
+        gcn_logits_all = self.gcn(A_torch, X_full)
         gcn_logits_batch = gcn_logits_all[idx, :]
         
-        # Final prediction interpolation (Equation 6)
         lambda_val = config.get('lmbda', 0.7)
-        final_logits = lambda_val * gcn_logits_batch + (1 - lambda_val) * bert_logits
+        
+        # Convert to probabilities (OFFICIAL IMPLEMENTATION APPROACH)
+        Z_gcn = F.softmax(gcn_logits_batch, dim=1)
+        Z_bert = F.softmax(bert_logits, dim=1)
+        
+        # Interpolate probabilities with epsilon for stability
+        Z_final = (Z_gcn + 1e-10) * lambda_val + Z_bert * (1 - lambda_val)
         
         # Return log probabilities for NLLLoss
-        return F.log_softmax(final_logits, dim=1)
+        return torch.log(Z_final)
