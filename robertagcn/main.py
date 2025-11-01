@@ -47,7 +47,7 @@ Configuration presets:
     
     parser.add_argument('--preset', type=str, default=None,
                        choices=['default', 'quickrun', 'low_resource', 
-                               'high_quality', 'social_heavy'],
+                               'high_quality'],
                        help='Use a preset configuration')
     
     parser.add_argument('--mode', type=str, default=None,
