@@ -218,9 +218,74 @@ def run_Kfold_cv(config):
         print(f"  F1:        {metrics['macro_f1']:.4f}")
         print(f"{'='*70}")
     
-    # [Rest of the function remains the same...]
-    # Aggregate results and save...
+    # Aggregate results
+    print("\n" + "="*70)
+    print("K-FOLD CROSS-VALIDATION RESULTS WITH EARLY STOPPING")
+    print("="*70)
     
+    accuracies = [m['accuracy'] for m in fold_results]
+    precisions = [m['macro_precision'] for m in fold_results]
+    recalls = [m['macro_recall'] for m in fold_results]
+    f1s = [m['macro_f1'] for m in fold_results]
+    stopped_epochs = [m.get('stopped_epoch', config.get('epochs', 10)) for m in fold_results]
+    
+    print(f"\nAverage epochs trained: {np.mean(stopped_epochs):.1f} ± {np.std(stopped_epochs):.1f}")
+    print(f"Accuracy:  {np.mean(accuracies):.4f} ± {np.std(accuracies):.4f}")
+    print(f"Precision: {np.mean(precisions):.4f} ± {np.std(precisions):.4f}")
+    print(f"Recall:    {np.mean(recalls):.4f} ± {np.std(recalls):.4f}")
+    print(f"F1-Score:  {np.mean(f1s):.4f} ± {np.std(f1s):.4f}")
+    
+    # Overall confusion matrix
+    print("\n" + "="*70)
+    print("Overall Confusion Matrix (All Folds)")
+    print("="*70)
+    cm = confusion_matrix(all_y_true, all_y_pred)
+    print(cm)
+    
+    # Classification report
+    print("\n" + "="*70)
+    print("Overall Classification Report")
+    print("="*70)
+    print(classification_report(
+        all_y_true, all_y_pred,
+        target_names=[f'Class {i}' for i in range(n_classes)],
+        zero_division=0
+    ))
+    
+    # Save results with training histories
+    if config.get('save_dir'):
+        os.makedirs(config.get('save_dir'), exist_ok=True)
+        
+        # Save fold results
+        results_df = pd.DataFrame({
+            'fold': range(1, config.get('fold',10)+1),
+            'accuracy': accuracies,
+            'precision': precisions,
+            'recall': recalls,
+            'f1': f1s,
+            'stopped_epoch': stopped_epochs,
+            'best_epoch': [m.get('best_epoch', config.get('epochs', 10)) for m in fold_results]
+        })
+        
+        save_path = os.path.join(config.get('save_dir'), '10fold_results.csv')
+        results_df.to_csv(save_path, index=False)
+        print(f"\nResults saved: {save_path}")
+        
+        # Save training histories
+        history_df = pd.DataFrame()
+        for fold_num, history in enumerate(training_histories, 1):
+            for epoch_data in history:
+                epoch_data['fold'] = fold_num
+                history_df = pd.concat([history_df, pd.DataFrame([epoch_data])], ignore_index=True)
+        
+        history_path = os.path.join(config.get('save_dir'), 'training_histories.csv')
+        history_df.to_csv(history_path, index=False)
+        print(f"Training histories saved: {history_path}")
+    
+    print("\n" + "="*70)
+    print("Cross-validation completed!")
+    print("="*70)
+
     return fold_results
 
 
